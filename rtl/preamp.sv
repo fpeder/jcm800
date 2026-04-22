@@ -1,0 +1,142 @@
+
+// =====================================================================
+// preamp — JCM800 2203 four-stage triode preamp
+//
+//   Cascade of four gain_stage instances with the Preamp Volume (Gain)
+//   pot inserted between V1A and V1B — the same circuit position as on
+//   a real JCM800 2203.  The pot is a log-taper attenuator driven by
+//   `gain_pot_pos` (0..255, see scripts/gen_log_taper.py).
+//
+//       x_in ─► V1A ─►[GAIN]─► V1B ─► V2A ─► V2B ─► y_out
+//
+//   Each gain_stage owns its own LUT+PCHIP pipeline, ×G_stage multiplier,
+//   plate LPF, cathode shelf, and coupling HPF — see gain_stage.sv for
+//   the intra-stage order and pipeline budget.
+//
+//   Stage parameters (LUT/TAN/LPF/SHELF/HPF .mem filenames) come from
+//   jcm800_lut_pkg so any regen of gen_triode_lut.py propagates here
+//   without edits.
+//
+//   Diagnostic taps expose the post-HPF output of V1A/V1B/V2A, held
+//   between samples by the filter state inside each gain_stage.
+//   `v1a_tap` is the PRE-gain V1A output (what a probe on V1A's plate
+//   would see); the post-pot signal is internal.
+//
+//   Gain-pot operating regions (log-taper, −60 dB at pot=0 → 0 dB at 255):
+//     pot ≤ 32   — clean: V2A grid stays inside the LUT linear region
+//     pot 32–96  — edge of breakup: V1B (cold clipper) starts asymmetric
+//                  clip; V2A still has dynamic range
+//     pot ≥ 96   — hard clip: cascade product to V2A is +49 dB or higher
+//                  (reaches +79 dB at pot=255), so V2A's grid hits the
+//                  ±2.4 V Vgk swing rail at any non-trivial input —
+//                  V2A becomes a near-full-wave rectifier.  This is the
+//                  intended cranked-2203 character, not a bug.
+// =====================================================================
+module preamp
+    import jcm800_pkg::*;
+    import jcm800_lut_pkg::*;
+(
+    input  logic       clk,
+    input  logic       rst_n,
+    input  sample_t    x_in,
+    input  logic       x_valid,
+    input  logic [7:0] gain_pot_pos,
+    output sample_t    y_out,
+    output logic       y_valid,
+
+    output sample_t    v1a_tap,
+    output sample_t    v1b_tap,
+    output sample_t    v2a_tap
+);
+
+    sample_t v1a_y, v1b_y, v2a_y;
+    logic    v1a_v, v1b_v, v2a_v;
+
+    sample_t v1a_post_gain;
+    logic    v1a_post_gain_v;
+
+    gain_stage #(
+        .STAGE         (STAGE_V1A),
+        .LUT_FILE      (LUT_FILE  [STAGE_V1A]),
+        .TAN_FILE      (TAN_FILE  [STAGE_V1A]),
+        .LPF_FILE      (LPF_FILE  [STAGE_V1A]),
+        .SHELF_FILE    (SHELF_FILE[STAGE_V1A]),
+        .HPF_FILE      (HPF_FILE  [STAGE_V1A]),
+        // Gap 2 — V1A is the only bypassed-cathode stage in the 2203, so
+        // its shelf moves pre-LUT and shelf_v1a.mem is the pre-emphasis form.
+        .SHELF_PRE_LUT (1'b1)
+    ) u_v1a (
+        .clk     (clk),
+        .rst_n   (rst_n),
+        .x_in    (x_in),
+        .x_valid (x_valid),
+        .y_out   (v1a_y),
+        .y_valid (v1a_v)
+    );
+
+    // Preamp Volume / Gain pot — log-taper attenuator between V1A and V1B.
+    level_ctrl #(
+        .COEF_FILE ("log_taper_256.mem")
+    ) u_gain (
+        .clk     (clk),
+        .rst_n   (rst_n),
+        .x_in    (v1a_y),
+        .x_valid (v1a_v),
+        .pot_pos (gain_pot_pos),
+        .y_out   (v1a_post_gain),
+        .y_valid (v1a_post_gain_v)
+    );
+
+    gain_stage #(
+        .STAGE      (STAGE_V1B),
+        .LUT_FILE   (LUT_FILE  [STAGE_V1B]),
+        .TAN_FILE   (TAN_FILE  [STAGE_V1B]),
+        .LPF_FILE   (LPF_FILE  [STAGE_V1B]),
+        .SHELF_FILE (SHELF_FILE[STAGE_V1B]),
+        .HPF_FILE   (HPF_FILE  [STAGE_V1B])
+    ) u_v1b (
+        .clk     (clk),
+        .rst_n   (rst_n),
+        .x_in    (v1a_post_gain),
+        .x_valid (v1a_post_gain_v),
+        .y_out   (v1b_y),
+        .y_valid (v1b_v)
+    );
+
+    gain_stage #(
+        .STAGE      (STAGE_V2A),
+        .LUT_FILE   (LUT_FILE  [STAGE_V2A]),
+        .TAN_FILE   (TAN_FILE  [STAGE_V2A]),
+        .LPF_FILE   (LPF_FILE  [STAGE_V2A]),
+        .SHELF_FILE (SHELF_FILE[STAGE_V2A]),
+        .HPF_FILE   (HPF_FILE  [STAGE_V2A])
+    ) u_v2a (
+        .clk     (clk),
+        .rst_n   (rst_n),
+        .x_in    (v1b_y),
+        .x_valid (v1b_v),
+        .y_out   (v2a_y),
+        .y_valid (v2a_v)
+    );
+
+    gain_stage #(
+        .STAGE      (STAGE_V2B),
+        .LUT_FILE   (LUT_FILE  [STAGE_V2B]),
+        .TAN_FILE   (TAN_FILE  [STAGE_V2B]),
+        .LPF_FILE   (LPF_FILE  [STAGE_V2B]),
+        .SHELF_FILE (SHELF_FILE[STAGE_V2B]),
+        .HPF_FILE   (HPF_FILE  [STAGE_V2B])
+    ) u_v2b (
+        .clk     (clk),
+        .rst_n   (rst_n),
+        .x_in    (v2a_y),
+        .x_valid (v2a_v),
+        .y_out   (y_out),
+        .y_valid (y_valid)
+    );
+
+    assign v1a_tap = v1a_y;
+    assign v1b_tap = v1b_y;
+    assign v2a_tap = v2a_y;
+
+endmodule
