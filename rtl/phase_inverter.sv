@@ -35,8 +35,10 @@ module phase_inverter
     parameter stage_id_t STAGE_A = STAGE_V2B,
     parameter stage_id_t STAGE_B = STAGE_V2B,
 
-    // LTP-aware gain overrides (Q4.20 signed).  Both come out of the
-    // generator as −1.0 because LUT_B is pre-inverted for anti-phase.
+    // LTP-aware gain overrides (Q4.20 signed).  G_PI_A is −1 and G_PI_B
+    // is +1 — LUT_B is pre-inverted AND G_PI_B carries the opposite sign
+    // of G_PI_A so the post-(LUT×G) output is truly anti-phase to the A
+    // arm (a prior bug had both at −1, which cancelled LUT_B's flip).
     parameter logic signed [31:0] G_PI_A_Q4_20_OV = jcm800_lut_pkg::G_PI_A_Q4_20,
     parameter logic signed [31:0] G_PI_B_Q4_20_OV = jcm800_lut_pkg::G_PI_B_Q4_20,
 

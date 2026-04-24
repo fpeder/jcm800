@@ -126,6 +126,19 @@ C_SCREEN      = 47.0e-6   # F  — shared screen bypass cap
 RAA           = 3.4e3     # Ω — OT primary (plate-to-plate)
 R_PLATE_LOAD  = RAA / 4.0 # Ω — each tube's effective AC load in AB1
 
+# Main HT (B+) rail dynamics.  The 2203's B+ comes through the rectifier,
+# choke, and reservoir/filter caps; under sustained class-AB drive the rail
+# droops because the reservoir cap can't refill fast enough through the
+# series DCR.  Dominant time constant is R_HT · C_HT — we model the whole
+# supply network as a single leaky integrator of that τ, driven by the
+# push-pull plate-current sum |Ip_a|+|Ip_b|.  PEAK_IP_A sets the
+# "ip_sum_norm = 1.0" reference so steady-state sag at peak drive lands at
+# R_HT · PEAK_IP_A / B_PLUS.  Default numbers target τ ≈ 140 ms and
+# ≈ 10 % peak droop — the canonical "cranked 2203 bloom".
+R_HT          = 300.0     # Ω — effective choke + rectifier series DCR
+C_HT          = 470.0e-6  # F — reservoir/filter cap
+PEAK_IP_A     = 0.15      # A — sum-of-Ip full-scale reference (class-AB peak)
+
 # Output transformer (approximate; these drive the filter coefficients)
 LP_PRIMARY    = 50.0      # H  — primary inductance (off-load)
 LLEAK         = 30.0e-3   # H  — total leakage referred to primary
@@ -602,18 +615,36 @@ def screen_supply_coeffs():
     return α, β
 
 
+def ht_supply_coeffs():
+    """HT (B+) rail sag integrator.  Same α/β factorisation as the screen
+    supply: α fixes the recovery RC, β/α is the steady-state droop fraction
+    at ip_sum_norm = 1.0.  Input to the integrator is |Ip_a|+|Ip_b| summed
+    at Q1.23, so "ip_sum_norm = 1.0" means the 25-bit sum has hit Q1.23
+    full-scale — the same convention screen_supply.sv uses for its
+    ig2_sum_q1_23 port."""
+    α = 1.0 / (FS_HZ * R_HT * C_HT)
+    ratio_sag_full = (R_HT * PEAK_IP_A) / B_PLUS
+    β = α * ratio_sag_full
+    return α, β
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # SV package emitter
 # ─────────────────────────────────────────────────────────────────────────────
 
 def write_power_pkg(pkg_path, timestamp, dc, el34_meta, eg_meta, ot_meta,
-                    alpha_screen, beta_screen, fc_prim, fc_leak, presence_fc):
+                    alpha_screen, beta_screen, alpha_ht, beta_ht,
+                    fc_prim, fc_leak, presence_fc):
     pkg_path = pathlib.Path(pkg_path)
     pkg_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Screen supply: α and β in Q1.31 (they are tiny fractional values).
     alpha_q = _to_q_signed(alpha_screen, 1, 31, 32)
     beta_q  = _to_q_signed(beta_screen,  1, 31, 32)
+
+    # HT supply: same format as the screen pair.
+    ht_alpha_q = _to_q_signed(alpha_ht, 1, 31, 32)
+    ht_beta_q  = _to_q_signed(beta_ht,  1, 31, 32)
 
     # Ig2 estimate: Kg1/Kg2 ≈ 0.144 — fraction of folded |Ip| that we treat
     # as Ig2 for the screen-supply feedback.  Q1.23.
@@ -705,6 +736,16 @@ package jcm800_power_pkg;
     // α, β are Q1.31 signed (tiny fractional values).
     localparam logic signed [31:0] SCREEN_ALPHA_Q1_31 = 32'h{alpha_q & 0xFFFFFFFF:08X};  // α = {alpha_screen:.6e}
     localparam logic signed [31:0] SCREEN_BETA_Q1_31  = 32'h{beta_q  & 0xFFFFFFFF:08X};  // β = {beta_screen:.6e}
+
+    // ----- HT (B+) supply RC ----------------------------------------------
+    // ht_ratio[n+1] = ht_ratio[n] + α_HT·(1 − ht_ratio[n]) − β_HT·ip_sum
+    //   Driven by |Ip_a|+|Ip_b| at Q1.23 — identical integrator to the
+    //   screen supply but with its own τ (R_HT·C_HT) and peak-reference
+    //   scaling (R_HT·PEAK_IP_A / B_PLUS).  ht_ratio drops from 1.0 toward
+    //   (1 − R_HT·PEAK_IP_A/B_PLUS) under sustained drive and is combined
+    //   with vg2_ratio in power_amp.sv to form the pentode output scale.
+    localparam logic signed [31:0] HT_ALPHA_Q1_31 = 32'h{ht_alpha_q & 0xFFFFFFFF:08X};  // α_HT = {alpha_ht:.6e}
+    localparam logic signed [31:0] HT_BETA_Q1_31  = 32'h{ht_beta_q  & 0xFFFFFFFF:08X};  // β_HT = {beta_ht:.6e}
 
     // Ig2 estimate: Ig2_tube ≈ IG2_RATIO_Q1_23 · |Ip_tube| (Q1.23 signed).
     // Derived from Koren Kg1/Kg2 for EL34 ≈ {ig2_ratio:.4f}.
@@ -815,9 +856,13 @@ def export_all(out_dir='lut_out', pkg_path='rtl/jcm800_power_pkg.sv', verbose=Tr
     # Screen supply coefficients
     α_screen, β_screen = screen_supply_coeffs()
 
+    # HT supply coefficients
+    α_ht, β_ht = ht_supply_coeffs()
+
     # SV package
     write_power_pkg(pkg_path, timestamp, dc, el34_meta, eg_meta, ot_meta,
-                    α_screen, β_screen, fc_prim, fc_leak, PRESENCE_FC_HZ)
+                    α_screen, β_screen, α_ht, β_ht,
+                    fc_prim, fc_leak, PRESENCE_FC_HZ)
 
     if verbose:
         print(f'\nJCM800 power-amp artifacts → {out_path.resolve()}')
@@ -835,6 +880,11 @@ def export_all(out_dir='lut_out', pkg_path='rtl/jcm800_power_pkg.sv', verbose=Tr
         ss_full = β_screen / α_screen
         print(f'Screen supply:   α={α_screen:.4e}  β={β_screen:.4e}   '
               f'(steady-state sag at Ig2_norm=1.0 ≈ {ss_full*100:.1f}%)')
+        ht_ss_full = β_ht / α_ht
+        ht_tau = R_HT * C_HT
+        print(f'HT supply:       α={α_ht:.4e}  β={β_ht:.4e}   '
+              f'τ={ht_tau*1e3:.1f} ms   '
+              f'(steady-state sag at Ip_norm=1.0 ≈ {ht_ss_full*100:.1f}%)')
         print(f'Presence shelf:  fc={PRESENCE_FC_HZ:.1f} Hz   '
               f'max lift ×{PRESENCE_MAX_LIFT:.2f}')
 

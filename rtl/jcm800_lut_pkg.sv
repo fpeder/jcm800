@@ -1,7 +1,7 @@
 //===========================================================================
 // jcm800_lut_pkg — AUTO-GENERATED; DO NOT EDIT BY HAND.
 //   Produced by: scripts/gen_triode_lut.py
-//   Timestamp:   2026-04-21 15:29:33
+//   Timestamp:   2026-04-23 16:27:09
 //
 //   Per-stage gain constants + .mem filenames for the redesigned gain_stage
 //   (LUT + PCHIP + ×G + plate LPF + cathode shelf + coupling HPF).
@@ -98,9 +98,14 @@ package jcm800_lut_pkg;
     //   Ip_b_q = 0.150 mA  Vak_b_q = 305.01 V
     //   A: |span|=62.31 V  |Gss|=11.13  dV=±6.07 V
     //   B: |span|=26.39 V  |Gss|=9.32  dV=±6.07 V
-    // LUT_B has its contents pre-inverted so both G_PI values land at −1.0.
+    // LUT_B has its contents pre-inverted AND G_PI_B carries the opposite
+    // sign of G_PI_A — the double sign-flip delivers the anti-phase drive
+    // the PI contract requires.  The historical "both G_PI values land
+    // at −1.0" convention was a bug: `G_stage = sign(slope_at_zero)` of the
+    // flipped LUT coincidentally matched the A-arm's G sign, cancelling
+    // the flip and producing in-phase outputs.
     localparam logic signed [31:0] G_PI_A_Q4_20 = 32'hFFF00000;   // -1.0000
-    localparam logic signed [31:0] G_PI_B_Q4_20 = 32'hFFF00000;   // -1.0000
+    localparam logic signed [31:0] G_PI_B_Q4_20 = 32'h00100000;   // +1.0000
 
     localparam string PI_A_LUT_FILE   = "pi_a_lut.mem";
     localparam string PI_A_TAN_FILE   = "pi_a_tan.mem";

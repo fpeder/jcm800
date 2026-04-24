@@ -795,6 +795,13 @@ def _fine_to_lut(x_fine, Vout_fine, Vout_bias, dV, label,
 
     slope_at_zero = float(pchip.derivative()(0.0))
     G_stage = float(np.sign(slope_at_zero))
+    if force_anti_phase:
+        # The `h_fine = -h_fine` flip above already inverted the LUT slope,
+        # but `G_stage = sign(slope)` re-picks the sign of the flipped LUT
+        # and cancels the inversion in the post-(LUT×G) output — PI_A and
+        # PI_B end up in-phase.  Flip G_stage here so the post-G response
+        # really is anti-phase to the natural-slope arm.
+        G_stage = -G_stage
     tube_Gss = Gss_mag * np.sign(slope_linear_at_zero) * np.sign(G_stage)
 
     # Soft-rail shoulder (see _soft_rail docstring) — identical treatment to
@@ -1208,7 +1215,12 @@ def _pi_pkg_block(pi_info):
     //   Ip_b_q = {dc['Ip_b_q']*1e3:.3f} mA  Vak_b_q = {dc['Vak_b_q']:.2f} V
     //   A: |span|={m_a['Vout_span_abs']:.2f} V  |Gss|={abs(m_a['tube_Gss']):.2f}  dV=±{m_a['dV']:.2f} V
     //   B: |span|={m_b['Vout_span_abs']:.2f} V  |Gss|={abs(m_b['tube_Gss']):.2f}  dV=±{m_b['dV']:.2f} V
-    // LUT_B has its contents pre-inverted so both G_PI values land at −1.0.
+    // LUT_B has its contents pre-inverted AND G_PI_B carries the opposite
+    // sign of G_PI_A — the double sign-flip delivers the anti-phase drive
+    // the PI contract requires.  The historical "both G_PI values land
+    // at −1.0" convention was a bug: `G_stage = sign(slope_at_zero)` of the
+    // flipped LUT coincidentally matched the A-arm's G sign, cancelling
+    // the flip and producing in-phase outputs.
     localparam logic signed [31:0] G_PI_A_Q4_20 = 32'h{G_a_q & 0xFFFFFFFF:08X};   // {m_a['G_stage']:+.4f}
     localparam logic signed [31:0] G_PI_B_Q4_20 = 32'h{G_b_q & 0xFFFFFFFF:08X};   // {m_b['G_stage']:+.4f}
 

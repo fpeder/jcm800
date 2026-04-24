@@ -25,7 +25,11 @@
 //                                   ▼
 //                                 v_sec ───► downsample_16x ──► ir_cab ──► y_out 48k
 //                                   │
-//                                   └─► nfb_network ─► nfb_inject
+//                                   └─► speaker_load ─► nfb_network ─► nfb_inject
+//                                       (reactive Zs(f) shaping on the
+//                                        NFB return only — the DAC path
+//                                        keeps tapping raw v_sec so the
+//                                        ir_cab isn't double-counted)
 //
 //   All DSP inside the oversample boundary runs at 768 kHz.  The
 //   secondary voltage v_sec feeds both the DAC path (through the 768k
@@ -170,6 +174,40 @@ module jcm800
         .v_sec       (v_sec_os),
         .v_sec_valid (v_sec_os_valid)
     );
+
+    // -----------------------------------------------------------------
+    // Speaker-impedance shaping on the NFB path.  A real 12" guitar
+    // speaker's Zs(f) has a resonance peak near 80 Hz and an inductive
+    // HF trend; nfb_network otherwise treats v_sec as if the secondary
+    // loaded into a flat 8 Ω.  speaker_load is a 2nd-order biquad tuned
+    // to Zs(ω)/Z_ideal (see scripts/gen_speaker_zs.py).  We insert it on
+    // the NFB return only — the DAC path keeps tapping v_sec_os, because
+    // ir_cab already bakes a full miked-cab response in.
+    //
+    // BYPASS (palm-mute-choke A/B): the biquad is instantiated but its
+    // output is not consumed — u_nfb taps v_sec_os directly.  Synthesis
+    // will prune u_speaker_load.  Revert by rewiring .v_sec/.v_sec_valid
+    // back to v_sec_nfb / v_sec_nfb_valid once the A/B is done.
+    // -----------------------------------------------------------------
+    sample_t v_sec_nfb;
+    logic    v_sec_nfb_valid;
+
+    speaker_load #(
+        .COEFF_FILE ("speaker_zs.mem")
+    ) u_speaker_load (
+        .clk     (clk),
+        .rst_n   (rst_n),
+        .x_in    (v_sec_os),
+        .x_valid (v_sec_os_valid),
+        .y_out   (v_sec_nfb),
+        .y_valid (v_sec_nfb_valid)
+    );
+
+    // Suppress unused-driver warnings while the biquad is bypassed.
+    sample_t _unused_v_sec_nfb;
+    logic    _unused_v_sec_nfb_valid;
+    assign _unused_v_sec_nfb       = v_sec_nfb;
+    assign _unused_v_sec_nfb_valid = v_sec_nfb_valid;
 
     // -----------------------------------------------------------------
     // NFB return (1-sample delay is inside nfb_network)

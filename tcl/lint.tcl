@@ -36,7 +36,7 @@ puts "Lint passed: elaborated arty_top on $part"
 # the integration step wires it into the top.  Each call covers the whole
 # sub-hierarchy (gain_stage pulls in iir_lpf1, cathode_shelf, iir_hpf1,
 # triode_bram, and both packages).
-foreach top {gain_stage ir_cab tonestack} {
+foreach top {gain_stage ir_cab tonestack ht_supply speaker_load} {
     synth_design -rtl -top $top -part $part
     puts "Lint passed: elaborated $top on $part"
 }

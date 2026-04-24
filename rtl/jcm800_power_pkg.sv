@@ -1,7 +1,7 @@
 //===========================================================================
 // jcm800_power_pkg — AUTO-GENERATED; DO NOT EDIT BY HAND.
 //   Produced by: scripts/gen_pentode_lut.py
-//   Timestamp:   2026-04-20 17:41:25
+//   Timestamp:   2026-04-23 13:24:13
 //
 //   Power-stage constants + .mem filenames for the new EL34 push-pull +
 //   output transformer + NFB/Presence subtree.  Generated alongside the
@@ -46,6 +46,16 @@ package jcm800_power_pkg;
     // α, β are Q1.31 signed (tiny fractional values).
     localparam logic signed [31:0] SCREEN_ALPHA_Q1_31 = 32'h0000E866;  // α = 2.770390e-05
     localparam logic signed [31:0] SCREEN_BETA_Q1_31  = 32'h00003A19;  // β = 6.925975e-06
+
+    // ----- HT (B+) supply RC ----------------------------------------------
+    // ht_ratio[n+1] = ht_ratio[n] + α_HT·(1 − ht_ratio[n]) − β_HT·ip_sum
+    //   Driven by |Ip_a|+|Ip_b| at Q1.23 — identical integrator to the
+    //   screen supply but with its own τ (R_HT·C_HT) and peak-reference
+    //   scaling (R_HT·PEAK_IP_A / B_PLUS).  ht_ratio drops from 1.0 toward
+    //   (1 − R_HT·PEAK_IP_A/B_PLUS) under sustained drive and is combined
+    //   with vg2_ratio in power_amp.sv to form the pentode output scale.
+    localparam logic signed [31:0] HT_ALPHA_Q1_31 = 32'h00004D77;  // α_HT = 9.234634e-06
+    localparam logic signed [31:0] HT_BETA_Q1_31  = 32'h00000794;  // β_HT = 9.033881e-07
 
     // Ig2 estimate: Ig2_tube ≈ IG2_RATIO_Q1_23 · |Ip_tube| (Q1.23 signed).
     // Derived from Koren Kg1/Kg2 for EL34 ≈ 0.1444.
