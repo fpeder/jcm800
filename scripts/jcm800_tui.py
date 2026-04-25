@@ -33,14 +33,19 @@ CH_BASS     = 0x04
 CH_MID      = 0x05
 CH_TREBLE   = 0x06
 GAIN_DEFAULT     = 0x80     # matches uart_pot_regs.sv reset defaults
-MASTER_DEFAULT   = 0xFF
+MASTER_DEFAULT   = 0x80     # matches uart_pot_regs.sv reset defaults
 PRESENCE_DEFAULT = 0x80
 BASS_DEFAULT     = 0x80
 MID_DEFAULT      = 0x80
 TREBLE_DEFAULT   = 0x80
 FT2232H_VID_PID = "0403:6010"   # FTDI FT2232H on the Arty A7
 
-BAR_WIDTH = 20
+MIN_PANEL_W    = 60
+MIN_BAR_WIDTH  = 10
+MAX_BAR_WIDTH  = 120
+# Width of everything in a pot row except the bar itself:
+# "  " + marker(1) + "  " + label(8) + "  " + value(3) + "  " + trailer(8) + "  "
+ROW_FIXED_COLS = 32
 FILL_CH   = "█"
 EMPTY_CH  = "░"
 
@@ -104,11 +109,6 @@ def pot_to_db(pot: int) -> str:
     return f"{db:+5.1f} dB"
 
 
-def bar(pot: int) -> str:
-    filled = round(pot / 255.0 * BAR_WIDTH)
-    return FILL_CH * filled + EMPTY_CH * (BAR_WIDTH - filled)
-
-
 def autodetect_port() -> str:
     matches = sorted(
         list_ports.grep(FT2232H_VID_PID),
@@ -128,13 +128,14 @@ def clamp(v: int) -> int:
     return max(0, min(255, v))
 
 
-def _pot_row_segments(key: str, label: str, pots: dict, focus: str, kind: str = "audio"):
+def _pot_row_segments(key: str, label: str, pots: dict, focus: str,
+                      bar_width: int, kind: str = "audio"):
     focused = key == focus
     marker = "●" if focused else "·"
     marker_pair = "red" if focused else "dim"
     label_pair = "gold" if focused else "cream"
-    filled = round(pots[key] / 255.0 * BAR_WIDTH)
-    empty = BAR_WIDTH - filled
+    filled = round(pots[key] / 255.0 * bar_width)
+    empty = bar_width - filled
     if kind == "tone":
         # Tonestack ROM is addressed by the top 3 bits of each pot
         # (8 positions per knob), so show the quantised index.
@@ -161,26 +162,29 @@ def draw(stdscr, port: str, baud: int, pots: dict, focus: str) -> None:
     stdscr.erase()
     max_y, max_x = stdscr.getmaxyx()
 
+    panel_w = max(MIN_PANEL_W, max_x - 2)
+    inner_w = panel_w - 4     # │ + pad + content + pad + │
+    bar_width = max(MIN_BAR_WIDTH,
+                    min(MAX_BAR_WIDTH, inner_w - ROW_FIXED_COLS))
+
     body = [
         [(" M A R S H A L L ", "gold_bold")],
         [("JCM800 2203", "cream")],
         [(f"── {port} @ {baud} ──", "footer")],
         [("", "cream")],
-        _pot_row_segments("gain",     "Gain    ", pots, focus),
-        _pot_row_segments("master",   "Master  ", pots, focus),
-        _pot_row_segments("presence", "Presence", pots, focus),
+        _pot_row_segments("gain",     "Gain    ", pots, focus, bar_width),
+        _pot_row_segments("master",   "Master  ", pots, focus, bar_width),
+        _pot_row_segments("presence", "Presence", pots, focus, bar_width),
         [("", "cream")],
-        _pot_row_segments("bass",     "Bass    ", pots, focus, kind="tone"),
-        _pot_row_segments("mid",      "Middle  ", pots, focus, kind="tone"),
-        _pot_row_segments("treble",   "Treble  ", pots, focus, kind="tone"),
+        _pot_row_segments("bass",     "Bass    ", pots, focus, bar_width, kind="tone"),
+        _pot_row_segments("mid",      "Middle  ", pots, focus, bar_width, kind="tone"),
+        _pot_row_segments("treble",   "Treble  ", pots, focus, bar_width, kind="tone"),
         [("", "cream")],
         [(" ↑/↓ select   ←/→ ±1   ⇧←/→ ±8   q quit ", "footer")],
     ]
 
     def line_w(segs): return sum(len(s) for s, _ in segs)
-    inner_w = max(line_w(l) for l in body)
-    panel_w = inner_w + 4   # │ + pad + content + pad + │
-    panel_h = len(body) + 2 # top border + body + bottom border
+    panel_h = max(len(body) + 2, max_y - 2)
 
     y0 = max(0, (max_y - panel_h) // 2)
     x0 = max(0, (max_x - panel_w) // 2)

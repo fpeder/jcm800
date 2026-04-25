@@ -81,14 +81,31 @@ module jcm800
         .out_valid  (x_os_valid)
     );
 
+    // Front-end attenuator — pulls the ADC stream down by INPUT_SCALE so
+    // V1A stays inside the linear region of its LUT for typical guitar
+    // levels.  See rtl/input_scale.sv and the
+    // jcm800_lut_pkg::INPUT_SCALE_DEFAULT_Q16_16 commentary in
+    // scripts/gen_triode_lut.py for the headroom-sizing rationale.
+    sample_t x_scaled;
+    logic    x_scaled_valid;
+
+    input_scale u_input_scale (
+        .clk     (clk),
+        .rst_n   (rst_n),
+        .x_in    (x_os),
+        .x_valid (x_os_valid),
+        .y_out   (x_scaled),
+        .y_valid (x_scaled_valid)
+    );
+
     sample_t y_pre;
     logic    y_pre_valid;
 
     preamp u_preamp (
         .clk          (clk),
         .rst_n        (rst_n),
-        .x_in         (x_os),
-        .x_valid      (x_os_valid),
+        .x_in         (x_scaled),
+        .x_valid      (x_scaled_valid),
         .gain_pot_pos (gain_pot_pos),
         .y_out        (y_pre),
         .y_valid      (y_pre_valid),

@@ -2,9 +2,15 @@
 // =====================================================================
 // arty_top — board wrapper for the Arty A7-100T
 //
-//   Thin structural layer: instantiates pmod_i2s2 (audio path) and the
-//   jcm800 DSP chain, wires the Pmod JA pins straight through, and
-//   drives the status LEDs.
+//   Thin structural layer: instantiates pmod_i2s2 (audio path), the
+//   jcm800 DSP chain, the UART pot interface, and the minimal UDP
+//   audio-sample streamer over MII Ethernet. Wires Pmod JA pins
+//   straight through and drives the status LEDs.
+//
+//   Ethernet notes (Arty A7 Rev. E, DP83848J):
+//     - NO crystal on the PHY; FPGA pin G18 *is* the PHY CLKIN.
+//       eth_ref_clk must be a 25 MHz clock for the PHY to operate.
+//     - MII mode is the board strap default; no MDIO init required.
 // =====================================================================
 module arty_top
     import jcm800_pkg::*;
@@ -26,6 +32,13 @@ module arty_top
     output logic ja_adc_lrck,
     output logic ja_adc_sclk,
     input  logic ja_adc_sdout,
+
+    // Ethernet MII TX-only (DP83848J on-board PHY)
+    input  logic       eth_tx_clk,
+    output logic       eth_ref_clk,
+    output logic [3:0] eth_txd,
+    output logic       eth_tx_en,
+    output logic       eth_rst_n,
 
     output logic led_locked,
     output logic led_lrck,
@@ -68,15 +81,6 @@ module arty_top
 
     // ---------------------------------------------------------------
     // UART-driven pot register file
-    //   Host sends 2-byte commands at 115200 8N1:
-    //     [0x01, pot]  → gain_pot_pos
-    //     [0x02, pot]  → master_pot_pos
-    //     [0x03, pot]  → presence_pot_pos
-    //     [0x04, pot]  → bass_pot_pos
-    //     [0x05, pot]  → mid_pot_pos
-    //     [0x06, pot]  → treble_pot_pos
-    //   All six reset defaults are 0x80 so the board boots audible with
-    //   presence at stock noon and the tonestack flat.
     // ---------------------------------------------------------------
     logic       byte_valid;
     logic [7:0] byte_data;
@@ -121,14 +125,39 @@ module arty_top
         .treble_pot_pos   (treble_pot_pos),
         .y_out            (y_out),
         .y_valid          (y_valid),
-        // pi_neg_tap is driven internally by power_amp now; left as a
-        // diagnostic port on the top-level interface but unused here.
         .pi_neg_tap       (),
         .pi_neg_valid     ()
     );
 
     // ---------------------------------------------------------------
-    // Status LEDs (LRCK divided down to ~6 Hz so it's visible)
+    // UDP audio-sample streamer (MII TX-only)
+    //   Dest: 192.168.1.255 : 0xBEEF  (broadcast, no ARP)
+    //   Src:  192.168.1.10  : 0xBEEF  (MAC 02:00:00:00:00:01)
+    //   Payload: 64 × 24-bit big-endian samples per packet (~750 pps)
+    // ---------------------------------------------------------------
+    udp_audio_tx u_udp_tx (
+        .clk          (clk),
+        .rst_n        (rst_n),
+        .sample_in    (y_out),
+        .sample_valid (y_valid),
+        .eth_tx_clk   (eth_tx_clk),
+        .eth_txd      (eth_txd),
+        .eth_tx_en    (eth_tx_en),
+        .eth_rst_n    (eth_rst_n)
+    );
+
+    // ---------------------------------------------------------------
+    // 25 MHz reference clock for the DP83848J PHY.
+    //   Divide-by-4 of the 100 MHz system clock. The Arty A7 has NO
+    //   crystal on the PHY; this pin *is* the PHY's CLKIN — without it
+    //   the PHY can't operate at all.
+    // ---------------------------------------------------------------
+    logic [1:0] eth_ref_div;
+    always_ff @(posedge clk) eth_ref_div <= eth_ref_div + 2'd1;
+    assign eth_ref_clk = eth_ref_div[1];
+
+    // ---------------------------------------------------------------
+    // Status LEDs
     // ---------------------------------------------------------------
     logic [23:0] blink_cnt;
     always_ff @(posedge clk or negedge rst_n)

@@ -68,6 +68,27 @@ set_property -dict {PACKAGE_PIN A9 IOSTANDARD LVCMOS33} [get_ports uart_rx]
 set_false_path -from [get_ports uart_rx]
 
 # ---------------------------------------------------------------
+# Ethernet MII TX-only (Arty A7 on-board DP83848J PHY)
+#   PHY drives ETH_TX_CLK at 25 MHz for 100BASE-TX.
+#   Only TX lanes + PHY reset are used; RX / MDIO / COL / CRS are
+#   left unconnected (PHY default strapping = MII + auto-neg).
+# ---------------------------------------------------------------
+set_property -dict {PACKAGE_PIN H16 IOSTANDARD LVCMOS33} [get_ports eth_tx_clk]
+set_property -dict {PACKAGE_PIN H14 IOSTANDARD LVCMOS33} [get_ports {eth_txd[0]}]
+set_property -dict {PACKAGE_PIN J14 IOSTANDARD LVCMOS33} [get_ports {eth_txd[1]}]
+set_property -dict {PACKAGE_PIN J13 IOSTANDARD LVCMOS33} [get_ports {eth_txd[2]}]
+set_property -dict {PACKAGE_PIN H17 IOSTANDARD LVCMOS33} [get_ports {eth_txd[3]}]
+set_property -dict {PACKAGE_PIN H15 IOSTANDARD LVCMOS33} [get_ports eth_tx_en]
+set_property -dict {PACKAGE_PIN C16 IOSTANDARD LVCMOS33} [get_ports eth_rst_n]
+set_property -dict {PACKAGE_PIN G18 IOSTANDARD LVCMOS33} [get_ports eth_ref_clk]
+
+create_clock -period 40.000 -name eth_tx_clk [get_ports eth_tx_clk]
+
+set_false_path -from [get_clocks sys_clk]    -to [get_clocks eth_tx_clk]
+set_false_path -from [get_clocks eth_tx_clk] -to [get_clocks sys_clk]
+set_false_path -to   [get_ports {eth_txd[*] eth_tx_en eth_rst_n eth_ref_clk}]
+
+# ---------------------------------------------------------------
 # CDC false paths between sys_clk and MCLK domains
 # The clk_wiz IP auto-creates clock "clk_out1_clk_wiz_mclk"
 # ---------------------------------------------------------------

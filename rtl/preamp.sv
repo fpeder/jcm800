@@ -2,35 +2,32 @@
 // =====================================================================
 // preamp — JCM800 2203 four-stage triode preamp
 //
-//   Cascade of four gain_stage instances with the Preamp Volume (Gain)
-//   pot inserted between V1A and V1B — the same circuit position as on
-//   a real JCM800 2203.  The pot is a log-taper attenuator driven by
-//   `gain_pot_pos` (0..255, see scripts/gen_log_taper.py).
+//   Four gain_stage instances with the schematic's two "Attenuator +
+//   Treble Peak" bright pads and the Preamp Volume pot interleaved:
 //
-//       x_in ─► V1A ─►[GAIN]─► V1B ─► V2A ─► V2B ─► y_out
+//       x_in ─► V1A ─►[BRIGHT_PAD_PRE_POT]─►[GAIN]─►
+//                  ─► V1B ─►[BRIGHT_PAD_V1B_V2A]─► V2A ─► V2B ─► y_out
 //
-//   Each gain_stage owns its own LUT+PCHIP pipeline, ×G_stage multiplier,
-//   plate LPF, cathode shelf, and coupling HPF — see gain_stage.sv for
-//   the intra-stage order and pipeline budget.
+//   RTL stage labels are swapped vs the real-circuit schematic:
+//       RTL V1A = schematic V1B (Preamp 1, input stage, bypassed cathode)
+//       RTL V1B = schematic V1A (Preamp 2, cold clipper, 10 kΩ unbypassed)
+//   Functionally identical — same circuit topology, just renamed.
 //
-//   Stage parameters (LUT/TAN/LPF/SHELF/HPF .mem filenames) come from
-//   jcm800_lut_pkg so any regen of gen_triode_lut.py propagates here
-//   without edits.
+//   Bright pads (470 kΩ series + 470 pF cap, feeding the next stage's
+//   470 kΩ grid leak): −6 dB at DC rising to 0 dB above ~1.4 kHz.  See
+//   scripts/gen_triode_lut.py BRIGHT_PADS dict and lut_out/bright_pad_*.
+//   They are first-order shelves implemented with cathode_shelf.sv (the
+//   same biquad form used elsewhere in the chain).
+//
+//   The Preamp Volume (Gain) pot is a log-taper attenuator driven by
+//   `gain_pot_pos` (0..255, see scripts/gen_log_taper.py), positioned
+//   between bright_pad_pre_pot and V1B (= schematic-V1A cold clipper)
+//   exactly as on the real schematic.
 //
 //   Diagnostic taps expose the post-HPF output of V1A/V1B/V2A, held
 //   between samples by the filter state inside each gain_stage.
-//   `v1a_tap` is the PRE-gain V1A output (what a probe on V1A's plate
-//   would see); the post-pot signal is internal.
-//
-//   Gain-pot operating regions (log-taper, −60 dB at pot=0 → 0 dB at 255):
-//     pot ≤ 32   — clean: V2A grid stays inside the LUT linear region
-//     pot 32–96  — edge of breakup: V1B (cold clipper) starts asymmetric
-//                  clip; V2A still has dynamic range
-//     pot ≥ 96   — hard clip: cascade product to V2A is +49 dB or higher
-//                  (reaches +79 dB at pot=255), so V2A's grid hits the
-//                  ±2.4 V Vgk swing rail at any non-trivial input —
-//                  V2A becomes a near-full-wave rectifier.  This is the
-//                  intended cranked-2203 character, not a bug.
+//   `v1a_tap` is the PRE-pad V1A output (what a probe on V1A's plate
+//   would see); the post-pad / post-pot signal is internal.
 // =====================================================================
 module preamp
     import jcm800_pkg::*;
@@ -52,8 +49,11 @@ module preamp
     sample_t v1a_y, v1b_y, v2a_y;
     logic    v1a_v, v1b_v, v2a_v;
 
-    sample_t v1a_post_gain;
-    logic    v1a_post_gain_v;
+    sample_t v1a_post_pad, v1a_post_gain;
+    logic    v1a_post_pad_v, v1a_post_gain_v;
+
+    sample_t v1b_post_pad;
+    logic    v1b_post_pad_v;
 
     gain_stage #(
         .STAGE         (STAGE_V1A),
@@ -74,14 +74,27 @@ module preamp
         .y_valid (v1a_v)
     );
 
-    // Preamp Volume / Gain pot — log-taper attenuator between V1A and V1B.
+    // Bright pad #1 — 470 kΩ series + 470 pF "Treble Peak" cap feeding the
+    // top of the Preamp Volume pot.  −6 dB at DC, flat above ~1.4 kHz.
+    cathode_shelf #(
+        .COEFF_FILE ("bright_pad_pre_pot.mem")
+    ) u_bright_pad_pre_pot (
+        .clk     (clk),
+        .rst_n   (rst_n),
+        .x_in    (v1a_y),
+        .x_valid (v1a_v),
+        .y_out   (v1a_post_pad),
+        .y_valid (v1a_post_pad_v)
+    );
+
+    // Preamp Volume / Gain pot — log-taper attenuator after the bright pad.
     level_ctrl #(
         .COEF_FILE ("log_taper_256.mem")
     ) u_gain (
         .clk     (clk),
         .rst_n   (rst_n),
-        .x_in    (v1a_y),
-        .x_valid (v1a_v),
+        .x_in    (v1a_post_pad),
+        .x_valid (v1a_post_pad_v),
         .pot_pos (gain_pot_pos),
         .y_out   (v1a_post_gain),
         .y_valid (v1a_post_gain_v)
@@ -103,6 +116,19 @@ module preamp
         .y_valid (v1b_v)
     );
 
+    // Bright pad #2 — same 470 kΩ + 470 pF + 470 kΩ network feeding V2A's
+    // grid leak.  Sits between the cold-clipper plate and V2A's grid.
+    cathode_shelf #(
+        .COEFF_FILE ("bright_pad_v1b_v2a.mem")
+    ) u_bright_pad_v1b_v2a (
+        .clk     (clk),
+        .rst_n   (rst_n),
+        .x_in    (v1b_y),
+        .x_valid (v1b_v),
+        .y_out   (v1b_post_pad),
+        .y_valid (v1b_post_pad_v)
+    );
+
     gain_stage #(
         .STAGE      (STAGE_V2A),
         .LUT_FILE   (LUT_FILE  [STAGE_V2A]),
@@ -113,8 +139,8 @@ module preamp
     ) u_v2a (
         .clk     (clk),
         .rst_n   (rst_n),
-        .x_in    (v1b_y),
-        .x_valid (v1b_v),
+        .x_in    (v1b_post_pad),
+        .x_valid (v1b_post_pad_v),
         .y_out   (v2a_y),
         .y_valid (v2a_v)
     );

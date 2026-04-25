@@ -1444,13 +1444,81 @@ def export_all(out_dir='lut_out', pkg_path='rtl/jcm800_lut_pkg.sv',
         write_shelf_mem(out_path / f'shelf_{s}.mem', b0, b1, a1,
                         timestamp, f'{s} cathode shelf', meta_lines)
 
+    # ── Interstage "Attenuator + Treble Peak" (Bright) pads ──────────────
+    # Two of these on the schematic, both 470 kΩ series + 470 pF "Treble
+    # Peak" cap in parallel, feeding the next stage's 470 kΩ grid leak:
+    #
+    #     prev plate ─ Cc ─┬── R_series (470 kΩ) ──┬── next grid
+    #                      │                       │
+    #                      └─── C_peak (470 pF) ───┘
+    #                                              │
+    #                                          R_grid_leak (470 kΩ)
+    #                                              │
+    #                                             GND
+    #
+    # Continuous transfer:
+    #   H(s) = K · (1 + s·τz) / (1 + s·τp)
+    #     K   = R_grid_leak / (R_series + R_grid_leak)        (DC gain)
+    #     τz  = R_series · C_peak                             (zero)
+    #     τp  = (R_series ∥ R_grid_leak) · C_peak             (pole)
+    #     HF  = K · τz/τp = 1.0   (R_series=R_grid_leak ⇒ flat above pole)
+    #
+    # We reuse `shelf_biquad(Rk=R_series, Ck=C_peak, Rp=∅, gm=1/R_grid_leak)`
+    # which produces a shelf with τz=Rk·Ck and τp=Rk·Ck/(1+gm·Rk) matching
+    # the bright-pad math (the 1+gm·Rk = (R_series+R_grid_leak)/R_grid_leak
+    # = 1/K identity).  Its DC gain is 1 and HF gain is 1+gm·Rk = 1/K, so we
+    # post-scale b0/b1 by K to land DC=K, HF=1.
+    BRIGHT_PADS = {
+        'pre_pot':   dict(R_series=470e3, C_peak=470e-12, R_grid_leak=470e3,
+                          where='V1A plate → 0.022 µF coupling → THIS PAD → '
+                                'top of Preamp Volume pot (1 MA).  '
+                                'Schematic: between V1B plate and Preamp '
+                                'Volume in real-circuit naming.'),
+        'v1b_v2a':   dict(R_series=470e3, C_peak=470e-12, R_grid_leak=470e3,
+                          where='V1B plate → 0.022 µF coupling → THIS PAD → '
+                                'V2A grid (470 kΩ grid leak).  '
+                                'Schematic: between V1A (cold clipper) plate '
+                                'and V2A grid.'),
+    }
+    for tag, bp in BRIGHT_PADS.items():
+        Rs, Cp, Rg = bp['R_series'], bp['C_peak'], bp['R_grid_leak']
+        K   = Rg / (Rs + Rg)
+        b0, b1, a1 = shelf_biquad(Rs, Cp, 0.0, 1.0 / Rg)
+        b0 *= K
+        b1 *= K
+        tau_z = Rs * Cp
+        tau_p = (Rs * Rg / (Rs + Rg)) * Cp
+        meta_lines = [
+            bp['where'],
+            f'R_series={Rs/1e3:.1f}kΩ  C_peak={Cp*1e12:.1f}pF  '
+            f'R_grid_leak={Rg/1e3:.1f}kΩ',
+            f'τ_zero={tau_z*1e6:.2f} µs (fc_z={1/(2*math.pi*tau_z):.1f} Hz)',
+            f'τ_pole={tau_p*1e6:.2f} µs (fc_p={1/(2*math.pi*tau_p):.1f} Hz)',
+            f'DC gain={K:.4f} ({20*math.log10(K):+.2f} dB)  '
+            f'HF gain={K*tau_z/tau_p:.4f} '
+            f'({20*math.log10(K*tau_z/tau_p):+.2f} dB)',
+        ]
+        write_shelf_mem(out_path / f'bright_pad_{tag}.mem', b0, b1, a1,
+                        timestamp, f'bright pad ({tag})', meta_lines)
+
     # ── Input-scale default (maps ADC full-scale → V1A grid-swing domain) ─
-    # The ADC's ±1.0 Q1.23 represents the guitar signal at the Hi jack.
-    # A typical overdriven humbucker peaks at ~1 V; we want that to reach a
-    # sizeable fraction of V1A's Vgk span (dV ≈ 1.2 V).  Mapping 1.0 → 1.0
-    # of the LUT domain (i.e. full swing at strong input) gives us scale=1.0
-    # in Q16.16 (= 0x00010000).  User will retune via runtime register.
-    input_scale_q16_16 = _to_q_signed(1.0, 16, 16, 32)
+    # V1A's LUT bakes the tube's small-signal voltage gain (Gss ≈ 41.5) into
+    # the LUT slope, so the LUT's soft-rail knee (h ≈ 0.92) is reached at an
+    # input of x ≈ 0.92/Gss ≈ 0.022 — i.e. any LUT input above ~−33 dBFS
+    # saturates V1A.  A typical electric-guitar pickup at the Hi jack hits the
+    # I2S2 ADC at roughly −20 to −10 dBFS, which without pre-attenuation would
+    # leave V1A permanently clipped regardless of the downstream Preamp Volume
+    # pot — making the gain pot behave like a volume control.  Pre-attenuating
+    # by 0.1 (−20 dB) keeps a typical −20 dBFS guitar signal in V1A's linear
+    # region (LUT input ≈ −40 dBFS) while leaving hot humbucker chord-attack
+    # peaks (~−10 dBFS) just barely above V1A's soft-knee — so V1A
+    # contributes a hint of harmonic colour on transients without smearing
+    # the gain-pot's clean window.  Originally tuned at 0.03 because the
+    # pre-V1A scaler hadn't been wired into the RTL yet; once
+    # rtl/input_scale.sv landed, that left the chain too clean and 0.1
+    # restored useful drive.  Users with quiet pickups can override via
+    # the runtime input-drive register.
+    input_scale_q16_16 = _to_q_signed(0.13, 16, 16, 32)
 
     # ── Phase inverter (Gap 3) — LTP-aware LUTs + filter coeffs ─────────
     pi_info = _export_pi(out_path, timestamp)
