@@ -1,7 +1,7 @@
 //===========================================================================
 // jcm800_lut_pkg — AUTO-GENERATED; DO NOT EDIT BY HAND.
 //   Produced by: scripts/gen_triode_lut.py
-//   Timestamp:   2026-04-24 17:08:39
+//   Timestamp:   2026-04-25 18:00:35
 //
 //   Per-stage gain constants + .mem filenames for the redesigned gain_stage
 //   (LUT + PCHIP + ×G + plate LPF + cathode shelf + coupling HPF).
@@ -34,7 +34,7 @@ package jcm800_lut_pkg;
     // to become a runtime register ("input drive" knob).  RTL op:
     //   x_q23 = saturate_s24( ($signed(adc_q23) * INPUT_SCALE_Q16_16) >>> 16 )
     localparam int                 SHIFT_IN = 16;
-    localparam logic signed [31:0] INPUT_SCALE_DEFAULT_Q16_16 = 32'h00002148;
+    localparam logic signed [31:0] INPUT_SCALE_DEFAULT_Q16_16 = 32'h00003333;
 
     // ─── DEPRECATED — preserved so the legacy preamp.sv still elaborates. ───
     // The redesigned gain_stage puts all per-stage gain in G_STAGE_Q4_20 and

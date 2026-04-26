@@ -1305,7 +1305,7 @@ def _export_pi(out_path, timestamp):
             f'PI_{side.upper()} output coupling '
             f'(Cc={c["Cc_F"]*1e9:.1f}nF, Z_next={c["R_pa_grid"]/1e3:.0f}kΩ, '
             f'τ={tau_hpf*1e3:.2f}ms, fc={fc_hpf:.2f}Hz)',
-            enable_bias_tracker=False,
+            enable_bias_tracker=True,
         )
 
     return dict(
@@ -1365,6 +1365,13 @@ def export_all(out_dir='lut_out', pkg_path='rtl/jcm800_lut_pkg.sv',
     # noise) was IMD-ing upward through the cascade and producing the flubby
     # low end.  Now each stage's coupling HPF reflects its actual schematic
     # coupling cap loaded by the next stage's grid network.
+    # Gap 1 (asymmetric coupling-cap bias tracker) is per-stage opt-in.
+    # V1A → V1B is the cold-clipper feed: its grid diode pumps the coupling
+    # cap on positive peaks, then the cap discharges slowly through V1B's
+    # grid leak — that's the iconic "blocking distortion" / strangled cold
+    # clipper recovery.  Other preamp coupling HPFs and the PI output HPF
+    # currently stay symmetric (set False) — turn on after listening tests.
+    BIAS_TRACKER_STAGES = {'v1a', 'v1b'}
     for s in _STAGE_ORDER:
         Cc      = _CIRCUIT[s]['Cc_F']
         Z_next  = _next_grid_Z(s)
@@ -1375,13 +1382,20 @@ def export_all(out_dir='lut_out', pkg_path='rtl/jcm800_lut_pkg.sv',
                       f'{s} output coupling '
                       f'(Cc={Cc*1e9:.1f}nF, Z_next={Z_next/1e3:.0f}kΩ, '
                       f'τ={tau_s*1e3:.2f}ms, fc={fc_s:.2f}Hz)',
-                      enable_bias_tracker=False)
+                      enable_bias_tracker=(s in BIAS_TRACKER_STAGES))
         params[s]['fc_hpf'] = fc_s
 
     # ── Plate LPFs (fc from Rp_ac · C_plate_total; CF → wideband) ───────
+    # Small-signal Miller (Cgp·(1+G)) is a worst-case estimate; under large
+    # signal the dynamic gain drops and the effective Miller pole sits well
+    # above this calc, so high-order harmonics survive into the next stage's
+    # grid in real circuits.  Floor CC stages at PLATE_LPF_FLOOR_HZ to
+    # restore that headroom.
+    PLATE_LPF_FLOOR_HZ = 60_000.0
     for s, p in params.items():
         if p['topology'] == 'cc':
             fc = 1.0 / (2.0 * math.pi * p['R_ac'] * p['C_plate'])
+            fc = max(fc, PLATE_LPF_FLOOR_HZ)
         else:
             # CF: cathode output impedance is ~1/gm, so corner is very high;
             # cap at Nyquist·0.95 to stay numerically sane (β → ~1 anyway).
@@ -1518,7 +1532,7 @@ def export_all(out_dir='lut_out', pkg_path='rtl/jcm800_lut_pkg.sv',
     # rtl/input_scale.sv landed, that left the chain too clean and 0.1
     # restored useful drive.  Users with quiet pickups can override via
     # the runtime input-drive register.
-    input_scale_q16_16 = _to_q_signed(0.13, 16, 16, 32)
+    input_scale_q16_16 = _to_q_signed(0.2, 16, 16, 32)
 
     # ── Phase inverter (Gap 3) — LTP-aware LUTs + filter coeffs ─────────
     pi_info = _export_pi(out_path, timestamp)

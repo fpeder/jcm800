@@ -1,7 +1,7 @@
 //===========================================================================
 // jcm800_power_pkg — AUTO-GENERATED; DO NOT EDIT BY HAND.
 //   Produced by: scripts/gen_pentode_lut.py
-//   Timestamp:   2026-04-23 13:24:13
+//   Timestamp:   2026-04-25 18:28:12
 //
 //   Power-stage constants + .mem filenames for the new EL34 push-pull +
 //   output transformer + NFB/Presence subtree.  Generated alongside the
@@ -18,16 +18,30 @@
 //===========================================================================
 package jcm800_power_pkg;
 
-    // ----- EL34 push-pull grid→plate-current LUT (shared for both tubes) ----
-    localparam string EL34_LUT_FILE = "el34_lut.mem";
-    localparam string EL34_TAN_FILE = "el34_tan.mem";
+    // ----- EL34 push-pull grid→plate-current LUT -------------------------
+    //   EL34_LUT_FILE / EL34_TAN_FILE: nominal Q-point LUT (Vg1=-38.00 V).
+    //     Used by output_transformer.sv as the OT-saturation pipeline's
+    //     bare LUT+PCHIP slot, and as the default when LUT_FILE is not
+    //     overridden at instantiation.
+    //   EL34_LUT_{A,B}_FILE / EL34_TAN_{A,B}_FILE: per-tube push-pull mismatch
+    //     LUTs (Vg1_a=-38.40 V, Vg1_b=-37.60 V).
+    //     Used by power_amp.sv u_tube_a / u_tube_b — two-tube bias offset
+    //     produces real even-order content from a class-AB pair.
+    localparam string EL34_LUT_FILE   = "el34_lut.mem";
+    localparam string EL34_TAN_FILE   = "el34_tan.mem";
+    localparam string EL34_LUT_A_FILE = "el34_lut_a.mem";
+    localparam string EL34_TAN_A_FILE = "el34_tan_a.mem";
+    localparam string EL34_LUT_B_FILE = "el34_lut_b.mem";
+    localparam string EL34_TAN_B_FILE = "el34_tan_b.mem";
 
     // Post-LUT gain (Q4.20).  LUT already bakes span and natural slope
-    // into Q1.23; G collapses to the phase sign.  Both tubes use +1.0 —
-    // the PI delivers anti-phase grid drives, so Ip_A − Ip_B in the OT
-    // gives the correct push-pull difference without LUT inversion.
-    localparam int                 SHIFT_G_EL34 = 20;
-    localparam logic signed [31:0] G_EL34_Q4_20 = 32'h00100000;
+    // into Q1.23; G collapses to the phase sign.  Per-tube G compensates
+    // the small slope difference introduced by VG1_TUBE_*_OFFSET so the
+    // overall headroom stays balanced across the pair.
+    localparam int                 SHIFT_G_EL34   = 20;
+    localparam logic signed [31:0] G_EL34_Q4_20   = 32'h00100000;
+    localparam logic signed [31:0] G_EL34_A_Q4_20 = 32'h00100000;
+    localparam logic signed [31:0] G_EL34_B_Q4_20 = 32'h00100000;
 
     // ----- Screen-scaling side table (Vg2/Vg2_nom)^Ex − 1 ------------------
     // Emitted for future use; the current pentode_stage.sv implementation

@@ -56,7 +56,13 @@ module gain_stage
     // (b0, b1 scaled by 1/(1+gm·Rk)) when this flag is asserted, or the
     // boost-HF form otherwise.  scripts/gen_triode_lut.py emits the
     // correct form based on stage name (V1A is pre-emphasis today).
-    parameter bit SHELF_PRE_LUT = 1'b0
+    parameter bit SHELF_PRE_LUT = 1'b0,
+    // Gap 1 — coupling-HPF asymmetric bias-tracker depth.  Right-shift on
+    // the env state before subtracting from the HPF output (see iir_hpf1.sv
+    // header for the per-value mapping).  Only takes effect when the
+    // HPF .mem file ships non-zero γ_atk / γ_rel; otherwise the env state
+    // stays at zero and the shift has no audible effect.
+    parameter int unsigned HPF_SHIFT_BIAS = 5
 )(
     input  logic    clk,
     input  logic    rst_n,
@@ -398,7 +404,10 @@ module gain_stage
     // ================================================================
     // iir_hpf1 — output coupling HPF (+ Gap 1 asymmetric bias tracker)
     // ================================================================
-    iir_hpf1 #(.COEFF_FILE(HPF_FILE)) u_hpf (
+    iir_hpf1 #(
+        .COEFF_FILE (HPF_FILE),
+        .SHIFT_BIAS (HPF_SHIFT_BIAS)
+    ) u_hpf (
         .clk     (clk),
         .rst_n   (rst_n),
         .x_in    (hpf_in),

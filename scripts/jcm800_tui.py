@@ -180,7 +180,7 @@ def draw(stdscr, port: str, baud: int, pots: dict, focus: str) -> None:
         _pot_row_segments("mid",      "Middle  ", pots, focus, bar_width, kind="tone"),
         _pot_row_segments("treble",   "Treble  ", pots, focus, bar_width, kind="tone"),
         [("", "cream")],
-        [(" ↑/↓ select   ←/→ ±1   ⇧←/→ ±8   q quit ", "footer")],
+        [(" ↑/↓ select   ←/→ ±8   ⇧←/→ ±16   q quit ", "footer")],
     ]
 
     def line_w(segs): return sum(len(s) for s, _ in segs)
@@ -255,13 +255,13 @@ def run(stdscr, ser: serial.Serial, port: str, baud: int, pots: dict) -> None:
         elif ch == curses.KEY_DOWN:
             focus = order[min(len(order) - 1, order.index(focus) + 1)]
         elif ch == curses.KEY_LEFT:
-            pots[focus] = clamp(pots[focus] - 1)
-        elif ch == curses.KEY_RIGHT:
-            pots[focus] = clamp(pots[focus] + 1)
-        elif ch == curses.KEY_SLEFT:
             pots[focus] = clamp(pots[focus] - 8)
-        elif ch == curses.KEY_SRIGHT:
+        elif ch == curses.KEY_RIGHT:
             pots[focus] = clamp(pots[focus] + 8)
+        elif ch == curses.KEY_SLEFT:
+            pots[focus] = clamp(pots[focus] - 16)
+        elif ch == curses.KEY_SRIGHT:
+            pots[focus] = clamp(pots[focus] + 16)
         elif ch == curses.KEY_HOME:
             pots[focus] = 0
         elif ch == curses.KEY_END:

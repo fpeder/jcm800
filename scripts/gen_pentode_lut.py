@@ -170,13 +170,15 @@ D_VGK_PAST_ZERO = 3.0     # V past Vgk=0 to capture grid-diode shoulder
 # DC operating point (single-ended bias-class-AB idle)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def solve_el34_dc():
+def solve_el34_dc(vg1_override=None):
     """
     Compute EL34 idle current given fixed-bias Vg1 and nominal rails.
-    Returns (Ip_q, Ig2_q, Vak_q, Ik_q) at Vgk = VG1_BIAS, Vg2 = VG2_NOM.
+    Returns (Ip_q, Ig2_q, Vak_q, Ik_q) at Vgk = vg1, Vg2 = VG2_NOM.
+    vg1_override lets per-tube push-pull mismatch shift the Q-point.
     """
+    vg1 = VG1_BIAS if vg1_override is None else vg1_override
     Vak_q = B_PLUS - _estimate_idle_ir_drop()       # rough (no OT DC drop)
-    Ip_q, Ig2_q = koren_pentode(VG1_BIAS, Vak_q, VG2_NOM, **_EL34)
+    Ip_q, Ig2_q = koren_pentode(vg1, Vak_q, VG2_NOM, **_EL34)
     Ik_q = Ip_q + Ig2_q
     return Ip_q, Ig2_q, Vak_q, Ik_q
 
@@ -211,13 +213,14 @@ def _apply_grid_diode(Vgk_drive, grid_R=GRID_DRIVE_Z,
     return Vgk
 
 
-def solve_ip_at_vin(Vin, Ip_q, Vak_q, Ik_q):
+def solve_ip_at_vin(Vin, Ip_q, Vak_q, Ik_q, vg1_override=None):
     """
     Return (Ip, Ig2) when the grid is driven by Vin volts above the
     fixed bias.  AC load line on the plate: ΔVak = −(Ip − Ip_q)·R_PLATE_LOAD.
     Screen is frozen at VG2_NOM for the LUT sweep (runtime scaling handles sag).
     """
-    Vgk_drive = VG1_BIAS + Vin
+    vg1 = VG1_BIAS if vg1_override is None else vg1_override
+    Vgk_drive = vg1 + Vin
     Vgk = _apply_grid_diode(Vgk_drive)
 
     def residual(Ip):
@@ -373,21 +376,24 @@ def _write_lut_mem(path, data, bits, header):
 # Pentode LUT (Ip transfer, bias-folded)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def generate_el34_lut(N_lut=4097, N_fine=32769):
+def generate_el34_lut(N_lut=4097, N_fine=32769, vg1_override=None):
     """
-    Build Ip(Vin) LUT for ONE EL34 at nominal (Vak, Vg2).  Same LUT is used
-    for tube A and tube B in the push-pull — the grids are driven anti-phase
-    by the PI, so subtracting Ip_B from Ip_A in output_transformer.sv
-    recovers push-pull operation without any LUT content inversion.
+    Build Ip(Vin) LUT for ONE EL34 at nominal (Vak, Vg2).  vg1_override
+    lets the caller emit per-tube push-pull-mismatch LUTs (tube A slightly
+    hotter, tube B slightly cooler) so the push-pull pair generates real
+    even-order content from bias asymmetry instead of being a perfectly
+    matched pair (which produces only odd harmonics).
     """
-    Ip_q, Ig2_q, Vak_q, Ik_q = solve_el34_dc()
+    vg1 = VG1_BIAS if vg1_override is None else vg1_override
+    Ip_q, Ig2_q, Vak_q, Ik_q = solve_el34_dc(vg1_override=vg1)
     # Grid-swing half-range: bias voltage magnitude + headroom past grid-diode
-    dV = abs(VG1_BIAS) + D_VGK_PAST_ZERO
+    dV = abs(vg1) + D_VGK_PAST_ZERO
     x_fine = nonuniform_grid(N_fine)
     Vin_fine = x_fine * dV
     Ip_fine  = np.empty_like(Vin_fine)
     for i, vin in enumerate(Vin_fine):
-        Ip_fine[i], _ = solve_ip_at_vin(float(vin), Ip_q, Vak_q, Ik_q)
+        Ip_fine[i], _ = solve_ip_at_vin(float(vin), Ip_q, Vak_q, Ik_q,
+                                        vg1_override=vg1)
     # Bias-fold at Vin=0 (Ip_q).  Ip rises with Vgk, so span is positive.
     # pre_scale_by_gss=True bakes |Gss| into the LUT slope (same convention
     # as the triode preamp), so the post-LUT G_stage collapses to ±1.0 and
@@ -400,8 +406,18 @@ def generate_el34_lut(N_lut=4097, N_fine=32769):
         x_fine, Ip_fine, Ip_q, 'el34_ip', N_lut=N_lut,
         pre_scale_by_gss=True,
     )
-    meta.update(dV=dV, Ip_q=Ip_q, Ig2_q=Ig2_q, Vak_q=Vak_q, Ik_q=Ik_q)
+    meta.update(dV=dV, Ip_q=Ip_q, Ig2_q=Ig2_q, Vak_q=Vak_q, Ik_q=Ik_q, Vg1=vg1)
     return lut_q, tan_q, meta
+
+
+# Push-pull mismatch — slight per-tube bias asymmetry on a −38 V Q-point
+# (~1 % in fixed-bias terms).  Real EL34 pairs typically run with 5–10 %
+# Ip mismatch; matching gear pulls that down to a few %.  The bias offset
+# alone produces audible H2 from the power stage; deliberately not adding
+# mu / Kg1 mismatch on top because that would skew H3 in ways that muddy
+# the result.
+VG1_TUBE_A_OFFSET = -0.4   # tube A runs hotter (more negative Vg1 → more Ip)
+VG1_TUBE_B_OFFSET = +0.4   # tube B runs cooler
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -634,7 +650,8 @@ def ht_supply_coeffs():
 
 def write_power_pkg(pkg_path, timestamp, dc, el34_meta, eg_meta, ot_meta,
                     alpha_screen, beta_screen, alpha_ht, beta_ht,
-                    fc_prim, fc_leak, presence_fc):
+                    fc_prim, fc_leak, presence_fc,
+                    el34_meta_a=None, el34_meta_b=None):
     pkg_path = pathlib.Path(pkg_path)
     pkg_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -676,6 +693,15 @@ def write_power_pkg(pkg_path, timestamp, dc, el34_meta, eg_meta, ot_meta,
     # recovers push-pull operation.
     g_el34_q = _to_q_signed(el34_meta['G_stage'], 4, 20, 32)
 
+    # Per-tube push-pull mismatch.  When meta_a/meta_b are not provided the
+    # legacy single-LUT layout is preserved (both tubes wired to el34_lut.mem).
+    if el34_meta_a is not None and el34_meta_b is not None:
+        g_el34_a_q = _to_q_signed(el34_meta_a['G_stage'], 4, 20, 32)
+        g_el34_b_q = _to_q_signed(el34_meta_b['G_stage'], 4, 20, 32)
+    else:
+        g_el34_a_q = g_el34_q
+        g_el34_b_q = g_el34_q
+
     # Push-pull sum scale: with the EL34 LUT now Gss-pre-scaled, each tube's
     # |ip_out| peaks at ~|Gss|·max(h_linear) ≈ 0.4·0.92 ≈ 0.37 in Q1.23,
     # so the anti-phase diff peaks at ≈ ±0.40.  We scale by 2.0 (not 0.5)
@@ -708,16 +734,30 @@ def write_power_pkg(pkg_path, timestamp, dc, el34_meta, eg_meta, ot_meta,
 //===========================================================================
 package jcm800_power_pkg;
 
-    // ----- EL34 push-pull grid→plate-current LUT (shared for both tubes) ----
-    localparam string EL34_LUT_FILE = "el34_lut.mem";
-    localparam string EL34_TAN_FILE = "el34_tan.mem";
+    // ----- EL34 push-pull grid→plate-current LUT -------------------------
+    //   EL34_LUT_FILE / EL34_TAN_FILE: nominal Q-point LUT (Vg1={VG1_BIAS:+.2f} V).
+    //     Used by output_transformer.sv as the OT-saturation pipeline's
+    //     bare LUT+PCHIP slot, and as the default when LUT_FILE is not
+    //     overridden at instantiation.
+    //   EL34_LUT_{{A,B}}_FILE / EL34_TAN_{{A,B}}_FILE: per-tube push-pull mismatch
+    //     LUTs (Vg1_a={VG1_BIAS+VG1_TUBE_A_OFFSET:+.2f} V, Vg1_b={VG1_BIAS+VG1_TUBE_B_OFFSET:+.2f} V).
+    //     Used by power_amp.sv u_tube_a / u_tube_b — two-tube bias offset
+    //     produces real even-order content from a class-AB pair.
+    localparam string EL34_LUT_FILE   = "el34_lut.mem";
+    localparam string EL34_TAN_FILE   = "el34_tan.mem";
+    localparam string EL34_LUT_A_FILE = "el34_lut_a.mem";
+    localparam string EL34_TAN_A_FILE = "el34_tan_a.mem";
+    localparam string EL34_LUT_B_FILE = "el34_lut_b.mem";
+    localparam string EL34_TAN_B_FILE = "el34_tan_b.mem";
 
     // Post-LUT gain (Q4.20).  LUT already bakes span and natural slope
-    // into Q1.23; G collapses to the phase sign.  Both tubes use +1.0 —
-    // the PI delivers anti-phase grid drives, so Ip_A − Ip_B in the OT
-    // gives the correct push-pull difference without LUT inversion.
-    localparam int                 SHIFT_G_EL34 = 20;
-    localparam logic signed [31:0] G_EL34_Q4_20 = 32'h{g_el34_q & 0xFFFFFFFF:08X};
+    // into Q1.23; G collapses to the phase sign.  Per-tube G compensates
+    // the small slope difference introduced by VG1_TUBE_*_OFFSET so the
+    // overall headroom stays balanced across the pair.
+    localparam int                 SHIFT_G_EL34   = 20;
+    localparam logic signed [31:0] G_EL34_Q4_20   = 32'h{g_el34_q   & 0xFFFFFFFF:08X};
+    localparam logic signed [31:0] G_EL34_A_Q4_20 = 32'h{g_el34_a_q & 0xFFFFFFFF:08X};
+    localparam logic signed [31:0] G_EL34_B_Q4_20 = 32'h{g_el34_b_q & 0xFFFFFFFF:08X};
 
     // ----- Screen-scaling side table (Vg2/Vg2_nom)^Ex − 1 ------------------
     // Emitted for future use; the current pentode_stage.sv implementation
@@ -784,26 +824,37 @@ def export_all(out_dir='lut_out', pkg_path='rtl/jcm800_power_pkg.sv', verbose=Tr
     out_path.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-    # EL34 Ip LUT
-    lut_q, tan_q, el34_meta = generate_el34_lut()
+    # EL34 Ip LUT — three sets:
+    #   nominal: legacy compatibility (also used by OT-sat re-use of the
+    #     pentode_stage pipeline) — Vg1 = VG1_BIAS exactly.
+    #   tube_a:  Vg1 = VG1_BIAS + VG1_TUBE_A_OFFSET  (slightly hotter)
+    #   tube_b:  Vg1 = VG1_BIAS + VG1_TUBE_B_OFFSET  (slightly cooler)
+    def _emit_el34(suffix, vg1_override):
+        lq, tq, m = generate_el34_lut(vg1_override=vg1_override)
+        hdr = (
+            f'// JCM800 EL34 — Ip(Vin) LUT, bias-folded Q1.23\n'
+            f'// Generated: {timestamp}\n'
+            f'// DC bias: Vg1={m["Vg1"]:.2f} V  Vg2={VG2_NOM:.1f} V  Vak={m["Vak_q"]:.2f} V\n'
+            f'//   Ip_q  = {m["Ip_q"]*1e3:.4f} mA  '
+            f'Ig2_q = {m["Ig2_q"]*1e3:.4f} mA  '
+            f'Ik_q  = {m["Ik_q"]*1e3:.4f} mA\n'
+            f'// Sweep:  Vin ∈ ±{m["dV"]:.2f} V; dV includes {D_VGK_PAST_ZERO} V past Vgk=0.\n'
+            f'// |ΔIp_span| = {m["span_abs"]*1e3:.4f} mA   |Gss| = {abs(m["tube_Gss"]):.3f}\n'
+            f'// Digital gain at Q-point = {m["digital_gain"]:+.3f}\n'
+            f'// Rails: flat_hi={m["flat_hi_entries"]}  flat_lo={m["flat_lo_entries"]}\n'
+            f'// addr 2048 ↔ Vin=0 ↔ lut=0  (bias-fold)\n'
+            f'//\n'
+        )
+        tan_hdr_local = hdr.replace('Ip(Vin) LUT', 'Ip PCHIP tangents')
+        sfx = f'_{suffix}' if suffix else ''
+        _write_lut_mem(out_path / f'el34_lut{sfx}.mem', lq, 24, hdr)
+        _write_lut_mem(out_path / f'el34_tan{sfx}.mem', tq, 24, tan_hdr_local)
+        return m
+
+    el34_meta   = _emit_el34('',  None)
+    el34_meta_a = _emit_el34('a', VG1_BIAS + VG1_TUBE_A_OFFSET)
+    el34_meta_b = _emit_el34('b', VG1_BIAS + VG1_TUBE_B_OFFSET)
     dc = (el34_meta['Ip_q'], el34_meta['Ig2_q'], el34_meta['Vak_q'], el34_meta['Ik_q'])
-    lut_hdr = (
-        f'// JCM800 EL34 — Ip(Vin) LUT, bias-folded Q1.23\n'
-        f'// Generated: {timestamp}\n'
-        f'// DC bias: Vg1={VG1_BIAS:.2f} V  Vg2={VG2_NOM:.1f} V  Vak={el34_meta["Vak_q"]:.2f} V\n'
-        f'//   Ip_q  = {el34_meta["Ip_q"]*1e3:.4f} mA  '
-        f'Ig2_q = {el34_meta["Ig2_q"]*1e3:.4f} mA  '
-        f'Ik_q  = {el34_meta["Ik_q"]*1e3:.4f} mA\n'
-        f'// Sweep:  Vin ∈ ±{el34_meta["dV"]:.2f} V; dV includes {D_VGK_PAST_ZERO} V past Vgk=0.\n'
-        f'// |ΔIp_span| = {el34_meta["span_abs"]*1e3:.4f} mA   |Gss| = {abs(el34_meta["tube_Gss"]):.3f}\n'
-        f'// Digital gain at Q-point = {el34_meta["digital_gain"]:+.3f}\n'
-        f'// Rails: flat_hi={el34_meta["flat_hi_entries"]}  flat_lo={el34_meta["flat_lo_entries"]}\n'
-        f'// addr 2048 ↔ Vin=0 ↔ lut=0  (bias-fold)\n'
-        f'//\n'
-    )
-    tan_hdr = lut_hdr.replace('Ip(Vin) LUT', 'Ip PCHIP tangents')
-    _write_lut_mem(out_path / 'el34_lut.mem', lut_q, 24, lut_hdr)
-    _write_lut_mem(out_path / 'el34_tan.mem', tan_q, 24, tan_hdr)
 
     # Screen scaling side table
     eg_q, eg_tan_q, eg_meta = generate_eg_scale_lut()
@@ -862,7 +913,8 @@ def export_all(out_dir='lut_out', pkg_path='rtl/jcm800_power_pkg.sv', verbose=Tr
     # SV package
     write_power_pkg(pkg_path, timestamp, dc, el34_meta, eg_meta, ot_meta,
                     α_screen, β_screen, α_ht, β_ht,
-                    fc_prim, fc_leak, PRESENCE_FC_HZ)
+                    fc_prim, fc_leak, PRESENCE_FC_HZ,
+                    el34_meta_a=el34_meta_a, el34_meta_b=el34_meta_b)
 
     if verbose:
         print(f'\nJCM800 power-amp artifacts → {out_path.resolve()}')
@@ -870,10 +922,16 @@ def export_all(out_dir='lut_out', pkg_path='rtl/jcm800_power_pkg.sv', verbose=Tr
         print(f'\nEL34 DC bias (fixed Vg1={VG1_BIAS:.1f} V, Vg2={VG2_NOM:.1f} V):')
         print(f'  Ip_q={dc[0]*1e3:.3f} mA   Ig2_q={dc[1]*1e3:.3f} mA   '
               f'Vak_q={dc[2]:.2f} V   Ik_q={dc[3]*1e3:.3f} mA')
-        print(f'\nEL34 LUT:  |span|={el34_meta["span_abs"]*1e3:.3f} mA   '
+        print(f'\nEL34 LUT (nominal):  |span|={el34_meta["span_abs"]*1e3:.3f} mA   '
               f'|Gss|={abs(el34_meta["tube_Gss"]):.3f}   '
-              f'G_stage={el34_meta["G_stage"]:+.2f}   '
+              f'G_stage={el34_meta["G_stage"]:+.3f}   '
               f'flat_hi={el34_meta["flat_hi_entries"]}  flat_lo={el34_meta["flat_lo_entries"]}')
+        for label, m in (("tube_a", el34_meta_a), ("tube_b", el34_meta_b)):
+            print(f'EL34 LUT ({label}, Vg1={m["Vg1"]:+.2f} V):  '
+                  f'|span|={m["span_abs"]*1e3:.3f} mA   '
+                  f'|Gss|={abs(m["tube_Gss"]):.3f}   '
+                  f'G_stage={m["G_stage"]:+.3f}   '
+                  f'Ip_q={m["Ip_q"]*1e3:.3f} mA')
         print(f'OT sat LUT: knee={ot_meta["knee"]}')
         print(f'OT HPF (Lp):     fc={fc_prim:.3f} Hz')
         print(f'OT LPF (Lleak):  fc={fc_leak:.1f} Hz')

@@ -64,7 +64,14 @@ module preamp
         .HPF_FILE      (HPF_FILE  [STAGE_V1A]),
         // Gap 2 — V1A is the only bypassed-cathode stage in the 2203, so
         // its shelf moves pre-LUT and shelf_v1a.mem is the pre-emphasis form.
-        .SHELF_PRE_LUT (1'b1)
+        .SHELF_PRE_LUT  (1'b1),
+        // Gap 1 — V1A's output coupling HPF is the only preamp HPF currently
+        // shipping non-zero γ_atk / γ_rel (see scripts/gen_triode_lut.py
+        // BIAS_TRACKER_STAGES).  Drop SHIFT_BIAS to 3 so the per-stage env
+        // subtract is ~6 % at full drive — matching the probe_attack baseline
+        // (env_peak ≈ 5.87 % cascade-total) instead of the ~1.5 % the default
+        // SHIFT_BIAS=5 would give for a single tracking stage.
+        .HPF_SHIFT_BIAS (3)
     ) u_v1a (
         .clk     (clk),
         .rst_n   (rst_n),

@@ -94,7 +94,11 @@ module power_amp
     sample_t ig2_a;
     logic    ig2_a_valid;
 
-    pentode_stage u_tube_a (
+    pentode_stage #(
+        .LUT_FILE         (EL34_LUT_A_FILE),
+        .TAN_FILE         (EL34_TAN_A_FILE),
+        .G_OVERRIDE_Q4_20 (G_EL34_A_Q4_20)
+    ) u_tube_a (
         .clk             (clk),
         .rst_n           (rst_n),
         .x_in            (y_pos),
@@ -107,14 +111,21 @@ module power_amp
     );
 
     // -----------------------------------------------------------------
-    // Tube B (identical LUT; PI delivers anti-phase y_neg)
+    // Tube B — slightly cooler bias (push-pull mismatch baked into
+    // EL34_LUT_B_FILE by gen_pentode_lut.py).  PI still delivers
+    // anti-phase y_neg; the small per-tube Vg1 offset adds 2nd-harmonic
+    // content that a perfectly matched pair would cancel out.
     // -----------------------------------------------------------------
     sample_t ip_b;
     logic    ip_b_valid;
     sample_t ig2_b;
     logic    ig2_b_valid;
 
-    pentode_stage u_tube_b (
+    pentode_stage #(
+        .LUT_FILE         (EL34_LUT_B_FILE),
+        .TAN_FILE         (EL34_TAN_B_FILE),
+        .G_OVERRIDE_Q4_20 (G_EL34_B_Q4_20)
+    ) u_tube_b (
         .clk             (clk),
         .rst_n           (rst_n),
         .x_in            (y_neg),
