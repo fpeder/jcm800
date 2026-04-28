@@ -1371,7 +1371,7 @@ def export_all(out_dir='lut_out', pkg_path='rtl/jcm800_lut_pkg.sv',
     # grid leak — that's the iconic "blocking distortion" / strangled cold
     # clipper recovery.  Other preamp coupling HPFs and the PI output HPF
     # currently stay symmetric (set False) — turn on after listening tests.
-    BIAS_TRACKER_STAGES = {'v1a', 'v1b'}
+    BIAS_TRACKER_STAGES = {'v1a', 'v1b', 'v2a'}
     for s in _STAGE_ORDER:
         Cc      = _CIRCUIT[s]['Cc_F']
         Z_next  = _next_grid_Z(s)

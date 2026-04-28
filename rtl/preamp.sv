@@ -142,7 +142,12 @@ module preamp
         .TAN_FILE   (TAN_FILE  [STAGE_V2A]),
         .LPF_FILE   (LPF_FILE  [STAGE_V2A]),
         .SHELF_FILE (SHELF_FILE[STAGE_V2A]),
-        .HPF_FILE   (HPF_FILE  [STAGE_V2A])
+        .HPF_FILE   (HPF_FILE  [STAGE_V2A]),
+        // Gap 1 — V2A→V2B coupling tracker.  V2B is a cathode follower
+        // whose grid does conduct on positive peaks but with smaller
+        // drive than V1B's grid sees the cold-clipper output.  Use
+        // SHIFT_BIAS=4 (~3 % subtract) — half-depth of V1A's =3.
+        .HPF_SHIFT_BIAS (4)
     ) u_v2a (
         .clk     (clk),
         .rst_n   (rst_n),

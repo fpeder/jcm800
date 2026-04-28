@@ -1,7 +1,7 @@
 //===========================================================================
 // jcm800_lut_pkg — AUTO-GENERATED; DO NOT EDIT BY HAND.
 //   Produced by: scripts/gen_triode_lut.py
-//   Timestamp:   2026-04-25 18:00:35
+//   Timestamp:   2026-04-28 12:25:51
 //
 //   Per-stage gain constants + .mem filenames for the redesigned gain_stage
 //   (LUT + PCHIP + ×G + plate LPF + cathode shelf + coupling HPF).
